@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galton Board Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the canvas and controls */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        canvas {
+            display: block;
+            background-color: #f3f4f6; /* Gray-100 */
+            border-radius: 0.375rem; /* rounded-md */
+            border: 1px solid #d1d5db; /* Gray-300 */
+        }
+        .control-button {
+            padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; color: white; cursor: pointer;
+            transition: background-color 0.2s ease-in-out, box-shadow 0.2s ease;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+        .control-button:hover { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+        .control-button:active { transform: translateY(1px); }
+        .start-button { background-color: #2563eb; } /* Blue-600 */
+        .start-button:hover { background-color: #1d4ed8; } /* Blue-700 */
+        .reset-button { background-color: #dc2626; } /* Red-600 */
+        .reset-button:hover { background-color: #b91c1c; } /* Red-700 */
+        .toggle-button { background-color: #16a34a; } /* Green-600 */
+        .toggle-button:hover { background-color: #15803d; } /* Green-700 */
+        .info-text { font-size: 0.875rem; color: #4b5563; margin-top: 0.5rem; }
+        input[type=range] { height: 8px; cursor: pointer; appearance: none; width: 100%; background: #d1d5db; border-radius: 9999px; outline: none; transition: background 0.2s ease; }
+        input[type=range]:hover { background: #9ca3af; }
+        input[type=range]::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; background: #2563eb; border-radius: 50%; cursor: pointer; }
+        input[type=range]::-moz-range-thumb { width: 20px; height: 20px; background: #2563eb; border-radius: 50%; cursor: pointer; border: none; }
+    </style>
+</head>
+<body class="bg-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-lg bg-white rounded-lg shadow-xl p-6">
+        <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">
+            Galton Board Simulator
+        </h1>
+
+        <img
+            id="rmitLogo"
+            src="https://placehold.co/120x40/005C9E/FFFFFF?text=RMIT+Logo"
+            alt="RMIT Logo Placeholder"
+            class="h-10 w-auto mx-auto mb-4" /* Centered, margin below */
+            onerror="this.alt='Logo failed to load'; this.style.display='none';" /* Hide if fails */
+        >
+
+        <canvas id="galtonCanvas" width="500" height="700" class="mx-auto mb-4"></canvas>
+
+        <div class="mb-4 px-2">
+             <label for="beadSlider" class="block text-sm font-medium text-gray-700 mb-1">Number of Beads: <span id="beadCountValue" class="font-semibold">100</span></label>
+             <input type="range" id="beadSlider" name="beadCount" min="10" max="500" value="100" step="10" class="w-full">
+        </div>
+
+        <div class="flex justify-center flex-wrap gap-2 mb-2">
+            <button id="startButton" class="control-button start-button">Drop Beads</button>
+            <button id="toggleCurveButton" class="control-button toggle-button">Toggle Curve</button>
+            <button id="resetButton" class="control-button reset-button">Reset</button>
+        </div>
+         <p id="statusText" class="text-center info-text">Adjust slider and click 'Drop Beads'.</p>
+         <p class="text-center info-text">Watch beads fall and pile up in the bins!</p>
+
+    </div>
+
+    <script>
+        const canvas = document.getElementById('galtonCanvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const resetButton = document.getElementById('resetButton');
+        const statusText = document.getElementById('statusText');
+        const beadSlider = document.getElementById('beadSlider');
+        const beadCountValueSpan = document.getElementById('beadCountValue');
+        const toggleCurveButton = document.getElementById('toggleCurveButton');
+
+        // --- Simulation Parameters ---
+        const beadColor = '#ef4444';
+        const beadRadius = 3.5; const landedBeadRadius = 3.5;
+        const pegRadius = 4; const numRows = 12; const startX = canvas.width / 2; const startY = 30;
+        const rowSpacing = 30; const pegSpacing = 30; const gravity = 0.18;
+        const bounceFactor = -0.3; const wallBounceFactor = -0.2;
+        const beadSettleBounceFactor = -0.05; const beadSettleFriction = 0.98;
+        const horizontalBounceScale = 0.8; const friction = 0.98;
+        const binHeight = 250; const binWallThickness = 2; const numBins = numRows + 1; const binWidth = canvas.width / numBins;
+        const curveColor = '#1f2937';
+        const restVelocityThreshold = 0.03; const supportCheckDistance = 0.5;
+
+
+        let pegs = []; let bins = []; let beads = []; let animationFrameId = null;
+        let beadsToDrop = 0; let beadsDroppedTotal = 0; let dropInterval = null;
+        let isRunning = false; let numBeadsToDropSetting = 100;
+        let showCurve = false;
+
+        // --- Initialization ---
+        function setup() {
+            // console.log("Setup called");
+            pegs = []; bins = Array.from({ length: numBins }, () => []); beads = [];
+            beadsDroppedTotal = 0; showCurve = false;
+
+            for (let row = 0; row < numRows; row++) {
+                const numPegsInRow = row + 1; const totalWidthForRow = (numPegsInRow - 1) * pegSpacing;
+                const firstPegX = startX - totalWidthForRow / 2; const y = startY + (row + 1) * rowSpacing;
+                for (let col = 0; col < numPegsInRow; col++) { const x = firstPegX + col * pegSpacing; pegs.push({ x, y, radius: pegRadius }); }
+            }
+
+            clearCanvas(); drawBoardBase();
+            try { // Add try-catch around potential DOM access issues
+                 numBeadsToDropSetting = parseInt(beadSlider.value);
+                 beadCountValueSpan.textContent = numBeadsToDropSetting;
+                 beadSlider.disabled = false;
+                 startButton.disabled = false;
+                 toggleCurveButton.disabled = false;
+                 const logo = document.getElementById('rmitLogo');
+                 if (logo) logo.style.display = 'block';
+            } catch (error) {
+                 // console.error("Error accessing slider/button elements during setup:", error);
+                 statusText.textContent = "Initialization Error!";
+            }
+            statusText.textContent = "Adjust slider and click 'Drop Beads'.";
+            isRunning = false; if (dropInterval) clearInterval(dropInterval); if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            animationFrameId = null;
+            // console.log("Setup finished");
+        }
+
+        // --- Drawing Functions ---
+        function clearCanvas() { try { ctx.clearRect(0, 0, canvas.width, canvas.height); } catch(e) { /* console.error("Clear canvas error:", e); */ } }
+        function drawPegs() { try { ctx.fillStyle = '#6b7280'; pegs.forEach(peg => { ctx.beginPath(); ctx.arc(peg.x, peg.y, peg.radius, 0, Math.PI * 2); ctx.fill(); }); } catch(e) { /* console.error("Draw pegs error:", e); */ } }
+        function drawBinStructure() { try { const bottomY = canvas.height - binHeight; ctx.fillStyle = '#9ca3af'; for (let i = 0; i <= numBins; i++) { const x = i * binWidth; ctx.fillRect(x - binWallThickness / 2, bottomY, binWallThickness, binHeight); } ctx.fillRect(0, canvas.height - binWallThickness, canvas.width, binWallThickness); } catch(e) { /* console.error("Draw bins error:", e); */ } }
+        function drawLandedBeads() { try { ctx.fillStyle = beadColor; bins.forEach(binContent => { binContent.forEach(landedBead => { ctx.beginPath(); ctx.arc(landedBead.x, landedBead.y, landedBead.radius, 0, Math.PI * 2); ctx.fill(); }); }); } catch(e) { /* console.error("Draw landed beads error:", e); */ } }
+        function drawFallingBeads() { try { ctx.fillStyle = beadColor; beads.forEach(bead => { ctx.beginPath(); ctx.arc(bead.x, bead.y, bead.radius, 0, Math.PI * 2); ctx.fill(); }); } catch(e) { /* console.error("Draw falling beads error:", e); */ } }
+        function drawBoardBase() { try { drawPegs(); drawBinStructure(); } catch(e) { /* console.error("Draw board base error:", e); */ } }
+
+        function drawDistributionCurve() {
+            try { // Wrap in try-catch
+                // console.log("drawDistributionCurve called. showCurve:", showCurve, "beadsDroppedTotal:", beadsDroppedTotal);
+                if (!showCurve || beadsDroppedTotal === 0) return;
+
+                const binTopY = canvas.height - binHeight;
+                const floorY = canvas.height - binWallThickness;
+                const availableHeight = binHeight - binWallThickness;
+
+                const meanBinIndex = numRows / 2;
+                const stdDevBins = Math.sqrt(numRows * 0.5 * 0.5);
+                const meanPixels = (meanBinIndex + 0.5) * binWidth;
+                const stdDevPixels = stdDevBins * binWidth;
+
+                if (stdDevPixels <= 0) { /* console.log("Error: stdDevPixels <= 0"); */ return; }
+
+                const normalPDF = (x, mean, stdDev) => {
+                    const variance = stdDev * stdDev; if (variance === 0) return 0;
+                    const exponent = -((x - mean) ** 2) / (2 * variance);
+                    const coefficient = 1 / (stdDev * Math.sqrt(2 * Math.PI));
+                    return coefficient * Math.exp(exponent);
+                };
+
+                const peakPdfValue = normalPDF(meanPixels, meanPixels, stdDevPixels);
+                if (peakPdfValue <= 0) { /* console.log("Error: peakPdfValue <= 0"); */ return; }
+
+                const targetPeakCanvasHeight = availableHeight * 0.7;
+                const scaleFactor = targetPeakCanvasHeight / peakPdfValue;
+                 // console.log("Curve Scaling - scaleFactor:", scaleFactor);
+
+                ctx.beginPath();
+                ctx.strokeStyle = curveColor;
+                ctx.lineWidth = 2;
+                const step = 2;
+                let firstPoint = true;
+
+                for (let x = 0; x <= canvas.width; x += step) {
+                    const pdfValue = normalPDF(x, meanPixels, stdDevPixels);
+                    const curveY = floorY - (pdfValue * scaleFactor);
+
+                    if (!isNaN(curveY) && curveY < floorY && curveY > binTopY - 20) {
+                        if (firstPoint) { ctx.moveTo(x, curveY); firstPoint = false; }
+                        else { ctx.lineTo(x, curveY); }
+                    }
+                }
+                ctx.stroke();
+                ctx.lineWidth = 1;
+                 // console.log("Curve drawing finished.");
+            } catch (error) {
+                 // console.error("Error drawing distribution curve:", error);
+                 // Optionally disable curve drawing if it errors repeatedly
+                 // showCurve = false;
+            }
+        }
+
+
+        // --- Simulation Logic ---
+        function isSupported(bead, binIndex, floorY) {
+             try { // Wrap in try-catch
+                 if (bead.y + bead.radius >= floorY - supportCheckDistance) { return true; }
+                 const landedInBin = bins[binIndex];
+                 if (!landedInBin) return false; // Safety check
+                 for (const landedBead of landedInBin) {
+                     const dx = bead.x - landedBead.x; const dy = bead.y - landedBead.y;
+                     const distance = Math.sqrt(dx * dx + dy * dy); const combinedRadius = bead.radius + landedBead.radius;
+                     if (dy < 0 && Math.abs(dy) < combinedRadius + supportCheckDistance && Math.abs(dx) < combinedRadius * 0.6) {
+                          if (distance < combinedRadius + supportCheckDistance) { return true; } } }
+                 return false;
+             } catch (error) {
+                  // console.error("Error in isSupported:", error);
+                  return false; // Assume not supported if error occurs
+             }
+        }
+        function createBead() { try { const initialOffsetX = (Math.random() - 0.5) * 5; beads.push({ x: startX + initialOffsetX, y: startY, vx: 0, vy: 0, radius: beadRadius }); beadsDroppedTotal++; } catch(e) { /* console.error("Create bead error:", e); */ } }
+
+        function updateBeads() {
+             try { // Wrap main loop logic in try-catch
+                const binTopY = canvas.height - binHeight; const floorY = canvas.height - binWallThickness;
+                for (let i = beads.length - 1; i >= 0; i--) {
+                    // Check if bead exists (might be removed mid-iteration elsewhere?)
+                    if (!beads[i]) continue;
+                    const bead = beads[i];
+
+                    let onLandedBead = false; bead.vy += gravity; bead.vx *= friction;
+                    let nextX = bead.x + bead.vx; let nextY = bead.y + bead.vy;
+                    if (nextY + bead.radius >= floorY) { nextY = floorY - bead.radius; if (bead.vy > 0) { bead.vy *= beadSettleBounceFactor; } bead.vx *= beadSettleFriction; }
+                    if (bead.y < binTopY) { pegs.forEach(peg => { if (Math.abs(bead.y - peg.y) < rowSpacing) { const dx = nextX - peg.x; const dy = nextY - peg.y; const distance = Math.sqrt(dx * dx + dy * dy);
+                                if (distance < bead.radius + peg.radius) { const angle = Math.atan2(dy, dx); const overlap = bead.radius + peg.radius - distance; nextX += Math.cos(angle) * overlap; nextY += Math.sin(angle) * overlap; bead.vy *= bounceFactor; bead.vx = (Math.random() < 0.5 ? -1 : 1) * horizontalBounceScale * (Math.random() * 0.5 + 0.5); nextY = bead.y + bead.vy; } } }); }
+                    if (nextY + bead.radius > binTopY - beadRadius) {
+                        const binIndex = Math.floor(bead.x / binWidth); const clampedIndex = Math.max(0, Math.min(numBins - 1, binIndex));
+                        if (clampedIndex >= 0 && clampedIndex < bins.length) { // Bounds check for bins array
+                            const leftWallX = clampedIndex * binWidth + binWallThickness / 2; const rightWallX = (clampedIndex + 1) * binWidth - binWallThickness / 2;
+                            if (nextX - bead.radius < leftWallX) { nextX = leftWallX + bead.radius; bead.vx *= wallBounceFactor; } else if (nextX + bead.radius > rightWallX) { nextX = rightWallX - bead.radius; bead.vx *= wallBounceFactor; }
+                            bins[clampedIndex].forEach(landedBead => { const dx = nextX - landedBead.x; const dy = nextY - landedBead.y; const distance = Math.sqrt(dx * dx + dy * dy); const minDist = bead.radius + landedBead.radius;
+                                if (distance < minDist) { onLandedBead = true; const overlap = minDist - distance; const angle = Math.atan2(dy, dx); const pushFactor = 0.5; nextX += Math.cos(angle) * overlap * pushFactor; nextY += Math.sin(angle) * overlap * pushFactor; bead.vx *= beadSettleFriction; if ((dy > 0 && bead.vy < 0) || (dy < 0 && bead.vy > 0)) { bead.vy *= beadSettleBounceFactor; } else { bead.vy *= beadSettleFriction; } } });
+                        } else {
+                             // console.warn("Invalid clampedIndex for bins:", clampedIndex); // Log warning if index is out of bounds
+                        }
+                     }
+                    bead.x = nextX; bead.y = nextY;
+                    let shouldLand = false;
+                    const currentBinIndex = Math.max(0, Math.min(numBins - 1, Math.floor(bead.x / binWidth)));
+                    if (bead.y + bead.radius > binTopY && Math.abs(bead.vx) < restVelocityThreshold && Math.abs(bead.vy) < restVelocityThreshold && isSupported(bead, currentBinIndex, floorY)) { shouldLand = true; bead.vy = 0; bead.vx = 0; }
+                    if (shouldLand) { const finalBinIndex = Math.floor(bead.x / binWidth); const finalClampedIndex = Math.max(0, Math.min(numBins - 1, finalBinIndex));
+                         if (finalClampedIndex >= 0 && finalClampedIndex < bins.length) { // Bounds check before push
+                            bins[finalClampedIndex].push({ x: bead.x, y: bead.y, radius: landedBeadRadius });
+                            beads.splice(i, 1);
+                         } else {
+                             // console.warn("Invalid finalClampedIndex for bins before push:", finalClampedIndex); // Log warning
+                             beads.splice(i, 1); // Remove bead anyway if index is bad
+                         }
+                    } else if (bead.y > canvas.height + bead.radius * 5) { beads.splice(i,1); }
+                }
+             } catch(error) {
+                  // console.error("Error during updateBeads loop:", error);
+                  // Potentially stop simulation or handle error gracefully
+                  // isRunning = false; // Example: stop if error is critical
+             }
+        }
+
+
+        // --- Animation Loop ---
+        // *** Simplified stop condition logic ***
+        function animate() {
+            try { // Wrap animation frame logic
+                clearCanvas();
+                updateBeads();
+                drawBoardBase();
+                drawLandedBeads();
+                drawDistributionCurve();
+                drawFallingBeads();
+
+                // Check if simulation should continue
+                if (isRunning || beads.length > 0 || beadsToDrop > 0) {
+                    animationFrameId = requestAnimationFrame(animate);
+                } else {
+                    // Simulation has finished (no longer running, no beads falling/dropping)
+                    // console.log("Animation stopping naturally");
+                    statusText.textContent = `Finished dropping ${beadsDroppedTotal} beads. Adjust slider or reset.`;
+                    isRunning = false; // Ensure state is reset
+                    startButton.disabled = false;
+                    beadSlider.disabled = false;
+                    toggleCurveButton.disabled = false;
+                    if (dropInterval) clearInterval(dropInterval); // Clear just in case
+                    dropInterval = null;
+                    animationFrameId = null; // Mark as stopped
+                    // Final redraw is good practice here
+                    clearCanvas(); drawBoardBase(); drawLandedBeads(); drawDistributionCurve();
+                }
+            } catch (error) {
+                 // console.error("Error in animation loop:", error);
+                 // Attempt to reset state gracefully if loop fails
+                 isRunning = false;
+                 startButton.disabled = false;
+                 beadSlider.disabled = false;
+                 toggleCurveButton.disabled = false;
+                 if (dropInterval) clearInterval(dropInterval);
+                 dropInterval = null;
+                 animationFrameId = null;
+                 statusText.textContent = "An error occurred. Please reset.";
+            }
+        }
+
+        // --- Event Listeners ---
+        // Add try-catch around listener logic just in case
+        beadSlider.addEventListener('input', (event) => {
+            try {
+                // console.log("Slider input detected");
+                numBeadsToDropSetting = parseInt(event.target.value);
+                beadCountValueSpan.textContent = numBeadsToDropSetting;
+                // console.log("Slider value:", numBeadsToDropSetting);
+                if (!isRunning) { statusText.textContent = `Ready to drop ${numBeadsToDropSetting} beads.`; }
+            } catch(e) { /* console.error("Slider listener error:", e); */ }
+        });
+
+        startButton.addEventListener('click', () => {
+             try {
+                // console.log("Start button clicked");
+                if (isRunning) return;
+                const numToDrop = numBeadsToDropSetting;
+                if (isNaN(numToDrop) || numToDrop <= 0) { // Basic validation
+                    statusText.textContent = "Please select a valid number of beads.";
+                    return;
+                }
+                beadsToDrop = numToDrop;
+                isRunning = true; startButton.disabled = true; beadSlider.disabled = true; toggleCurveButton.disabled = true;
+                statusText.textContent = `Dropping ${numToDrop} beads...`;
+                const dropDelay = Math.max(10, 50 - Math.floor(numToDrop / 20));
+                dropInterval = setInterval(() => { if (beadsToDrop > 0) { createBead(); beadsToDrop--; if (numToDrop <= 100 || beadsToDrop % 10 === 0 || beadsToDrop < 10) { statusText.textContent = `Dropping... ${beadsToDrop} left. Total: ${beadsDroppedTotal}`; } } else { clearInterval(dropInterval); dropInterval = null; statusText.textContent = `All ${numToDrop} beads dropped (${beadsDroppedTotal} total). Simulating...`; } }, dropDelay);
+                if (!animationFrameId) { animate(); } // Start animation if not already running
+             } catch (e) { /* console.error("Start button listener error:", e); */ }
+        });
+
+        resetButton.addEventListener('click', () => {
+             try {
+                // console.log("Reset button clicked");
+                if (dropInterval) clearInterval(dropInterval); dropInterval = null;
+                if (animationFrameId) cancelAnimationFrame(animationFrameId); animationFrameId = null;
+                isRunning = false; beadsToDrop = 0;
+                setup(); // Reset everything
+             } catch (e) { /* console.error("Reset button listener error:", e); */ }
+        });
+
+        toggleCurveButton.addEventListener('click', () => {
+            try {
+                // console.log("Toggle curve button clicked");
+                showCurve = !showCurve;
+                // console.log("showCurve toggled to:", showCurve);
+                // Force redraw immediately
+                clearCanvas(); drawBoardBase(); drawLandedBeads(); drawDistributionCurve(); drawFallingBeads();
+                // console.log("Forced redraw complete");
+            } catch (e) { /* console.error("Toggle button listener error:", e); */ }
+        });
+
+        // --- Initial Setup ---
+        window.addEventListener('load', setup);
+    </script>
+
+</body>
+</html>
